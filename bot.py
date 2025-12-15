@@ -350,35 +350,28 @@ class InstagramReelsBot:
             time.sleep(WAIT_LONG)
 
             # Look for more options menu
-            more_selectors = [
-                "//android.widget.ImageView[@content-desc='More options']",
-                "//android.widget.ImageView[contains(@content-desc, 'More')]"
-            ]
+            share_selector = "//android.widget.ImageView[@content-desc='Share']"
 
-            for selector in more_selectors:
-                try:
-                    more_button = self.driver.find_element(AppiumBy.XPATH, selector)
-                    more_button.click()
-                    time.sleep(WAIT_MEDIUM)
-                    break
-                except:
-                    continue
+            try:
+                more_button = self.driver.find_element(AppiumBy.XPATH, share_selector)
+                more_button.click()
+                time.sleep(WAIT_MEDIUM)
+            except:
+                print("[WARNING] Could not find Share button")
+                return False
 
             # Look for Save option
-            save_selectors = [
-                "//android.widget.TextView[contains(@text, 'Save')]",
-                "//android.widget.Button[contains(@text, 'Save')]"
-            ]
+            download_selector = "//android.widget.TextView[contains(@text, 'Download')]"
 
-            for selector in save_selectors:
-                try:
-                    save_button = self.driver.find_element(AppiumBy.XPATH, selector)
-                    save_button.click()
-                    time.sleep(WAIT_MEDIUM)
-                    print("[SUCCESS] Reel saved!")
-                    break
-                except:
-                    continue
+            try:
+                save_button = self.driver.find_element(AppiumBy.XPATH, download_selector)
+                save_button.click()
+                time.sleep(WAIT_MEDIUM)
+                print("[SUCCESS] Reel saved!")
+
+            except:
+                print("[WARNING] Could not find Download button")
+                return False
 
             # Go back
             self.driver.back()
