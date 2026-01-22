@@ -14,7 +14,7 @@ YOUR_USERNAME = ""
 APPIUM_SERVER = "http://localhost:4723"
 DEVICE_ID = ""
 
-CHECK_INTERVAL = 60  # Check for new DMs every 60 seconds
+CHECK_INTERVAL = 320  # Check for new DMs every 60 seconds
 WAIT_SHORT = 2
 WAIT_MEDIUM = 5
 WAIT_LONG = 10
@@ -203,9 +203,9 @@ class InstagramReelsBot:
         try:
             # Look for messenger/DM icon
             dm_selectors = [
-                "//android.widget.ImageView[@content-desc='Direct']",
+                '//android.widget.ImageView[@content-desc="Message"]',
                 "//android.widget.Button[@content-desc='Direct']",
-                "com.instagram.android:id/action_bar_inbox_button"
+                "com.instagram.android:id/direct_tab"
             ]
 
             for selector in dm_selectors:
@@ -215,7 +215,7 @@ class InstagramReelsBot:
                     else:
                         dm_button = self.driver.find_element(AppiumBy.ID, selector)
                     dm_button.click()
-                    time.sleep(WAIT_MEDIUM)
+                    time.sleep(WAIT_SHORT)
                     print("[SUCCESS] Opened DMs")
                     return True
                 except:
@@ -346,19 +346,19 @@ class InstagramReelsBot:
         print("[INFO] Downloading reel...")
         try:
             # Click on reel
-            reel_element.click()
-            time.sleep(WAIT_LONG)
+            # reel_element.click()
+            # time.sleep(WAIT_SHORT)
 
             # Look for more options menu
-            share_selector = "//android.widget.ImageView[@content-desc='Share']"
-
-            try:
-                more_button = self.driver.find_element(AppiumBy.XPATH, share_selector)
-                more_button.click()
-                time.sleep(WAIT_MEDIUM)
-            except:
-                print("[WARNING] Could not find Share button")
-                return False
+            # share_selector = "//android.widget.ImageView[@content-desc='Share']"
+            #
+            # try:
+            #     more_button = self.driver.find_element(AppiumBy.XPATH, share_selector)
+            #     more_button.click()
+            #     time.sleep(WAIT_SHORT)
+            # except:
+            #     print("[WARNING] Could not find Share button")
+            #     return False
 
             # Look for Save option
             download_selector = "//android.widget.TextView[contains(@text, 'Download')]"
@@ -373,102 +373,66 @@ class InstagramReelsBot:
                 print("[WARNING] Could not find Download button")
                 return False
 
-            # Go back
-            self.driver.back()
-            time.sleep(WAIT_SHORT)
-            self.driver.back()
-            time.sleep(WAIT_SHORT)
+            while not self.driver.find_element(AppiumBy.XPATH, value='//*[@text="For you"]'):
+                # Go back
+                self.driver.back()
+                time.sleep(WAIT_SHORT)
 
             return True
         except Exception as e:
             print(f"[ERROR] Failed to download reel: {e}")
-            try:
-                self.driver.back()
-            except:
-                pass
-            return False
+            # try:
+            #     self.driver.back()
+            # except:
+            #     pass
+            # return False
 
     def repost_reel(self):
         """Create new reel post from saved video"""
         print("[INFO] Reposting reel...")
         try:
-            # Go to home first
-            self.go_home()
 
             # Click create button
-            create_selectors = [
-                "//android.widget.ImageView[@content-desc='New post']",
-                "//android.widget.FrameLayout[@content-desc='Create']"
-            ]
 
-            for selector in create_selectors:
-                try:
-                    create_btn = self.driver.find_element(AppiumBy.XPATH, selector)
-                    create_btn.click()
-                    time.sleep(WAIT_MEDIUM)
-                    break
-                except:
-                    continue
+            post_selector = "com.instagram.android:id/action_bar_buttons_container_left"
+
+            create_btn = self.driver.find_element(AppiumBy.ID, post_selector)
+            create_btn.click()
+            time.sleep(WAIT_MEDIUM)
 
             # Select Reel
-            try:
-                reel_option = self.driver.find_element(AppiumBy.XPATH, "//android.widget.TextView[contains(@text, 'Reel')]")
-                reel_option.click()
-                time.sleep(WAIT_MEDIUM)
-            except:
-                pass
-
-            # Select first video (most recent = the one we just saved)
-            try:
-                first_video = self.driver.find_element(AppiumBy.XPATH, "(//android.widget.ImageView)[1]")
-                first_video.click()
-                time.sleep(WAIT_MEDIUM)
-            except:
-                pass
+            select_reel = self.driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR,
+                                                   'new UiSelector().className("android.view.ViewGroup").instance(2)')
+            select_reel.click()
+            time.sleep(WAIT_MEDIUM)
 
             # Click Next multiple times
-            next_selectors = [
-                "//android.widget.Button[contains(@text, 'Next')]",
-                "//android.widget.ImageView[@content-desc='Next']"
-            ]
 
-            for _ in range(3):  # Click Next 3 times
-                for selector in next_selectors:
-                    try:
-                        next_btn = self.driver.find_element(AppiumBy.XPATH, selector)
-                        next_btn.click()
-                        time.sleep(WAIT_MEDIUM)
-                        break
-                    except:
-                        continue
+
+
+            next_btn = self.driver.find_element(AppiumBy.ID, "com.instagram.android:id/next_button_textview")
+            next_btn.click()
+            time.sleep(WAIT_LONG)
+
+            # next_btn_2nd = self.driver.find_element(AppiumBy.ID, "com.instagram.android:id/next_button_textview")
+            # next_btn_2nd.click()
+            # time.sleep(WAIT_MEDIUM)
+
+            next_btn_3rd = self.driver.find_element(AppiumBy.ACCESSIBILITY_ID, "Next") or self.driver.find_element(by=AppiumBy.ID, value="com.instagram.android:id/next_button_layout").click()
+            next_btn_3rd.click()
+            time.sleep(WAIT_MEDIUM)
 
             # Click Share/Post
-            share_selectors = [
-                "//android.widget.Button[contains(@text, 'Share')]",
-                "//android.widget.TextView[contains(@text, 'Share')]"
-            ]
 
-            for selector in share_selectors:
-                try:
-                    share_btn = self.driver.find_element(AppiumBy.XPATH, selector)
-                    share_btn.click()
-                    time.sleep(WAIT_LONG)
-                    print("[SUCCESS] Reel posted!")
-                    return True
-                except:
-                    continue
+            share_btn = self.driver.find_element(AppiumBy.ACCESSIBILITY_ID, "Share")
+            share_btn.click()
+            time.sleep(WAIT_LONG)
+            print("[SUCCESS] Reel posted!")
 
-            return True
         except Exception as e:
             print(f"[ERROR] Failed to repost: {e}")
+            self.go_home()
             # Go back to home
-            for _ in range(5):
-                try:
-                    self.driver.back()
-                    time.sleep(1)
-                except:
-                    break
-            return False
 
     def go_home(self):
         """Navigate to home screen"""
@@ -525,22 +489,56 @@ class InstagramReelsBot:
                     # Navigate to DMs
                     if not self.navigate_to_dms():
                         print("[WARNING] Could not open DMs, retrying...")
-                        time.sleep(CHECK_INTERVAL)
                         continue
 
                     # Find conversation
                     if not self.find_conversation(YOUR_USERNAME):
                         print(f"[WARNING] No conversation with @{YOUR_USERNAME}, retrying...")
-                        time.sleep(CHECK_INTERVAL)
                         continue
 
                     # Check for reels
                     reels = self.check_for_reels()
 
                     if reels:
+
                         for i, reel_data in enumerate(reels):
                             reel_element = reel_data['element']
-                            reel_id = reel_data['id']
+                            # reel_id = reel_data['id']
+
+                            # Click on reel
+                            reel_element.click()
+                            time.sleep(WAIT_SHORT)
+
+                            share_selector = "//android.widget.ImageView[@content-desc='Share']"
+
+                            try:
+                                more_button = self.driver.find_element(AppiumBy.XPATH, share_selector)
+                                more_button.click()
+                                time.sleep(WAIT_SHORT)
+                            except:
+                                print("[WARNING] Could not find Share button")
+                                return False
+
+                            # Copy link
+
+                            copy_selector = "//android.widget.ImageView[@content-desc='Copy link']"
+                            try:
+                                copy_button = self.driver.find_element(AppiumBy.XPATH, copy_selector)
+                                copy_button.click()
+                                time.sleep(WAIT_SHORT)
+                            except:
+                                print("[WARNING] Could not find Copy Link button")
+                                return False
+
+
+
+                            # Get the text from the Android clipboard
+                            copied_text = self.driver.get_clipboard_text()
+                            print(f"The text I copied was: {copied_text}")
+
+                            reel_id = copied_text
+
+
 
                             if reel_id in self.processed_reels:
                                 print(f"[INFO] Reel {i+1} already processed (ID: {reel_id}), skipping...")
