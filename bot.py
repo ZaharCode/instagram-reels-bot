@@ -1,9 +1,12 @@
-
+import re
 import time
-import json
 import subprocess
 import os
-from pathlib import Path
+import platform
+import logging
+logger = logging.getLogger(__name__)
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from appium import webdriver
 from appium.options.android import UiAutomator2Options
 from appium.webdriver.common.appiumby import AppiumBy
@@ -15,37 +18,32 @@ APPIUM_SERVER = "http://localhost:4723"
 DEVICE_ID = ""
 
 CHECK_INTERVAL = 320  # Check for new DMs every 60 seconds
-WAIT_SHORT = 2
-WAIT_MEDIUM = 5
-WAIT_LONG = 10
-
 
 class InstagramReelsBot:
     def __init__(self):
         self.driver = None
         self.appium_process = None
-        self.processed_reels = self.load_processed_reels()
 
-    def load_processed_reels(self):
+    def load_processed_reels(self, id):
         """Load list of already processed reels"""
-        try:
-            if Path("processed_reels.json").exists():
-                with open("processed_reels.json", "r") as f:
-                    return set(json.load(f))
-        except:
-            pass
-        return set()
+        with open('processed_reels.txt', 'r') as file:
+            content = file.read()
+            if id in content:
+                print(f"[INFO] Reel {id} already processed, skipping...")
+                return False
+            else:
+                return True
 
-    def save_processed_reels(self):
+    def save_processed_reels(self, id):
         """Save list of processed reels"""
-        with open("processed_reels.json", "w") as f:
-            json.dump(list(self.processed_reels), f)
-
+        with open('processed_reels.txt', 'a') as file:
+            file.write(f"\n{id}")
 
 
     def start_appium_server(self):
-        """Start Appium server in background"""
+        """Start Appium server in background, with OS-specific handling."""
         print("[INFO] Checking if Appium is already running...")
+        current_os = platform.system()
 
         # Check if Appium is already running on port 4723 and kill it
         try:
@@ -57,49 +55,72 @@ class InstagramReelsBot:
             if result == 0:
                 print("[INFO] Appium is already running on port 4723")
                 print("[INFO] Killing existing Appium server to start fresh with correct environment...")
-                # Kill any process using port 4723
-                subprocess.run(['pkill', '-f', 'appium'], stderr=subprocess.DEVNULL)
+                if current_os == "Windows":
+                    subprocess.run(['taskkill', '/F', '/IM', 'node.exe'], stderr=subprocess.DEVNULL)
+                else:  # macOS and Linux
+                    subprocess.run(['pkill', '-f', 'appium'], stderr=subprocess.DEVNULL)
                 time.sleep(2)  # Wait for process to die
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[WARNING] Failed to check or kill existing Appium process: {e}")
 
         print("[INFO] Starting Appium server...")
 
         try:
             # Auto-detect Android SDK
             android_sdk = None
-            possible_sdk_paths = [
-                os.path.expanduser('~/Android/Sdk'),
-                os.path.expanduser('~/Library/Android/sdk'),  # macOS
-                '/usr/local/android-sdk',
-                '/opt/android-sdk',
-            ]
+            possible_sdk_paths = []
+            if current_os == "Windows":
+                possible_sdk_paths = [
+                    os.path.join(os.environ.get("LOCALAPPDATA"), "Android", "Sdk"),
+                    os.path.join(os.environ.get("ProgramFiles"), "Android", "android-sdk"),
+                ]
+            else:  # macOS and Linux
+                possible_sdk_paths = [
+                    os.path.expanduser('~/Android/Sdk'),
+                    os.path.expanduser('~/Library/Android/sdk'),  # macOS
+                    '/usr/local/android-sdk',
+                    '/opt/android-sdk',
+                ]
 
             for sdk_path in possible_sdk_paths:
-                if os.path.exists(sdk_path):
+                if sdk_path and os.path.exists(sdk_path):
                     android_sdk = sdk_path
                     print(f"[INFO] Found Android SDK at: {android_sdk}")
                     break
 
             if not android_sdk:
                 print("[WARNING] Could not find Android SDK. Appium may fail to connect.")
+                android_sdk = ""
 
-            # Source NVM and set Android SDK environment variables, then run appium
-            command = f'''
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            export ANDROID_HOME="{android_sdk}"
-            export ANDROID_SDK_ROOT="{android_sdk}"
-            appium
-            '''
+            # Set environment variables and run Appium
+            env = os.environ.copy()
+            env['ANDROID_HOME'] = android_sdk
+            env['ANDROID_SDK_ROOT'] = android_sdk
+
+            command = []
+            shell = False
+            executable = None
+
+            if current_os == "Windows":
+                command = ['appium']
+                shell = True
+            else:
+                command = f'''
+                export NVM_DIR="$HOME/.nvm"
+                [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+                appium
+                '''
+                shell = True
+                executable = '/bin/bash'
 
             self.appium_process = subprocess.Popen(
                 command,
-                shell=True,
+                shell=shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                executable='/bin/bash',
-                text=True
+                executable=executable,
+                text=True,
+                env=env
             )
 
             # Give Appium a few seconds to start and check output
@@ -132,14 +153,19 @@ class InstagramReelsBot:
         if self.appium_process:
             print("[INFO] Stopping Appium server...")
             try:
-                self.appium_process.terminate()
-                self.appium_process.wait(timeout=20)
+                if platform.system() == "Windows":
+                    # On Windows, terminate doesn't kill child processes (like node)
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(self.appium_process.pid)], stderr=subprocess.DEVNULL)
+                else:
+                    self.appium_process.terminate()
+                    self.appium_process.wait(timeout=20)
                 print("[SUCCESS] Appium server stopped")
-            except:
+            except Exception as e:
+                print(f"[WARNING] Could not terminate Appium gracefully: {e}. Killing...")
                 try:
                     self.appium_process.kill()
-                except:
-                    pass
+                except Exception as kill_e:
+                    print(f"[ERROR] Failed to kill Appium process: {kill_e}")
 
     def connect(self):
         """Connect to Instagram app via Appium"""
@@ -147,11 +173,9 @@ class InstagramReelsBot:
 
         options = UiAutomator2Options()
         options.platform_name = "Android"
-        options.platform_version = "15"
-        options.device_name = "Pixel 9 Pro API 35"
         options.udid = DEVICE_ID
         options.app_package = "com.instagram.android"
-        options.app_activity = "com.instagram.mainactivity.MainActivity"
+        options.app_activity = "com.instagram.android.activity.MainTabActivity"
         options.no_reset = True
         options.full_reset = False
         options.new_command_timeout = 300
@@ -166,14 +190,17 @@ class InstagramReelsBot:
 
         print("[SUCCESS] Connected to Instagram app!")
         print("[INFO] Launching Instagram...")
-        time.sleep(WAIT_LONG)
+        time.sleep(5)
 
         # Force activate the app if it's not in foreground
         try:
             self.driver.activate_app("com.instagram.android")
-            time.sleep(WAIT_MEDIUM)
+            time.sleep(5)
         except:
             pass
+
+        # Handle any initial pop-ups after launch
+        self.handle_popups()
 
     def is_logged_in(self):
         """Check if already logged in"""
@@ -197,32 +224,36 @@ class InstagramReelsBot:
             pass
         return False
 
+    def handle_popups(self):
+        """Handle common pop-ups by clicking 'Not now' or similar buttons."""
+        print("[INFO] Checking for pop-ups...")
+        try:
+            not_now_button = WebDriverWait(self.driver, 3).until(EC.presence_of_element_located((AppiumBy.ACCESSIBILITY_ID, "Not now")))
+            not_now_button.click()
+            ok_button = WebDriverWait(self.driver, 3).until(
+                EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("OK")')))
+            ok_button.click()
+            print("[SUCCESS] Clicked 'Not now' pop-up, checking if there is another one.")
+            if not_now_button.is_displayed():
+                not_now_button.click()
+            got_it_button = WebDriverWait(self.driver, 3).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, "new UiSelector().text('Got it')")))
+            got_it_button.click()
+            if WebDriverWait(self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/igds_headline_emphasized_headline").text("Get more from your next reel")')):
+                self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/title_text").text("For you")').click()
+
+        except:
+            print("[INFO] Pop-up not found,continuing...")
+
     def navigate_to_dms(self):
         """Navigate to DM inbox"""
         print("[INFO] Opening DMs...")
         try:
             # Look for messenger/DM icon
-            dm_selectors = [
-                '//android.widget.ImageView[@content-desc="Message"]',
-                "//android.widget.Button[@content-desc='Direct']",
-                "com.instagram.android:id/direct_tab"
-            ]
+            dm_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((AppiumBy.ID, "com.instagram.android:id/direct_tab")))
+            dm_button.click()
+            print("[SUCCESS] Opened DMs")
+            return True
 
-            for selector in dm_selectors:
-                try:
-                    if selector.startswith("//"):
-                        dm_button = self.driver.find_element(AppiumBy.XPATH, selector)
-                    else:
-                        dm_button = self.driver.find_element(AppiumBy.ID, selector)
-                    dm_button.click()
-                    time.sleep(WAIT_SHORT)
-                    print("[SUCCESS] Opened DMs")
-                    return True
-                except:
-                    continue
-
-            print("[WARNING] Could not find DM button")
-            return False
         except Exception as e:
             print(f"[ERROR] Failed to open DMs: {e}")
             return False
@@ -233,15 +264,14 @@ class InstagramReelsBot:
         try:
             # Look for username in conversation list
             conversation_selectors = [
-                f"//android.widget.TextView[contains(@text, '{username}')]",
-                f"//android.view.View[contains(@content-desc, '{username}')]"
+                f"new UiSelector().text('{username}')",
+                f'new UiSelector().resourceId("com.instagram.android:id/row_inbox_username")'
             ]
 
             for selector in conversation_selectors:
                 try:
-                    conversation = self.driver.find_element(AppiumBy.XPATH, selector)
+                    conversation = self.driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR, selector)
                     conversation.click()
-                    time.sleep(WAIT_MEDIUM)
                     print(f"[SUCCESS] Opened conversation with @{username}")
                     return True
                 except:
@@ -260,132 +290,74 @@ class InstagramReelsBot:
             print("[INFO] Scrolling to load messages...")
             try:
                 self.driver.swipe(500, 1000, 500, 500, 500)
-                time.sleep(WAIT_SHORT)
             except:
                 pass
 
             # Look for message_content FrameLayouts (these contain reels/media)
-            reels = []
-
             try:
-                # Primary method: Find by resource-id (most reliable)
                 print("[INFO] Looking for message_content elements...")
-                message_contents = self.driver.find_elements(
-                    AppiumBy.ID,
-                    "com.instagram.android:id/message_content"
+                # 1. Wait for all elements to be present
+                reels = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_all_elements_located(
+                        (AppiumBy.ID, "com.instagram.android:id/message_content_horizontal_placeholder_container"))
                 )
 
-                if message_contents:
-                    print(f"[INFO] Found {len(message_contents)} message_content element(s)")
+                # 2. Pick the last one (highest instance)
+                reel = reels[-1]
+                reel.click()
 
-                    # Filter for media messages (they have larger bounds)
-                    for content in message_contents:
-                        try:
-                            size = content.size
-                            location = content.location
-                            if size['height'] > 500:  # Media messages are taller
-                                print(f"[INFO] Found media element with size: {size}, location: {location}")
-                                # Create a unique identifier based on position and size
-                                unique_id = f"{location['y']}_{size['height']}_{size['width']}"
-                                reels.append({
-                                    'element': content,
-                                    'id': unique_id
-                                })
-                        except:
-                            continue
+                share_button = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located(
+                    (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/direct_share_button")')))
+                share_button.click()
+
+                reel_link = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located(
+                    (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().description("Copy link")')))
+                reel_link.click()
+                time.sleep(1)
+                unique_id = self.driver.get_clipboard_text()
+                unique_id = re.search(r"\/reels?\/([^\/\?#]+)", unique_id)
+
+                if unique_id:
+                    unique_id = unique_id.group(1)
                 else:
-                    print("[WARNING] No message_content elements found")
+                    # If it fails, unique_id stays as the full URL or you can set a fallback
+                    print("Warning: Regex could not find the ID in the string.")
+
+                if self.load_processed_reels(unique_id):
+                    # Add to processed reels and save
+                    self.save_processed_reels(unique_id)
+                else:
+                    return False
+
+                print(f"[SUCCESS] Found new reel with ID: {unique_id}")
+                return True
+
 
             except Exception as e:
-                print(f"[WARNING] Primary detection failed: {e}")
+                print(f"[ERROR] Failed to process reel: {e}")
+                return None
 
-            # Fallback: Try XPath method
-            if not reels:
-                print("[INFO] Trying XPath fallback method...")
-                try:
-                    xpath_reels = self.driver.find_elements(
-                        AppiumBy.XPATH,
-                        "//android.widget.FrameLayout[@resource-id='com.instagram.android:id/message_content']"
-                    )
-
-                    for reel in xpath_reels:
-                        try:
-                            size = reel.size
-                            location = reel.location
-                            if size['height'] > 500:
-                                unique_id = f"{location['y']}_{size['height']}_{size['width']}"
-                                reels.append({
-                                    'element': reel,
-                                    'id': unique_id
-                                })
-                        except:
-                            continue
-                except:
-                    pass
-
-            if reels:
-                print(f"[SUCCESS] Found {len(reels)} reel(s) to process!")
-            else:
-                print("[INFO] No reels detected - saving debug info...")
-                try:
-                    # Save page source to help debug
-                    page_source = self.driver.page_source
-                    with open("page_source_debug.xml", "w", encoding="utf-8") as f:
-                        f.write(page_source)
-                    print("[INFO] Page source saved to page_source_debug.xml")
-                except:
-                    pass
-
-            return reels
         except Exception as e:
             print(f"[ERROR] Failed to check for reels: {e}")
-            return []
+            return None
 
-    def download_reel(self, reel_element):
+
+
+    def download_reel(self):
         """Download reel by saving it"""
         print("[INFO] Downloading reel...")
+
         try:
-            # Click on reel
-            # reel_element.click()
-            # time.sleep(WAIT_SHORT)
+            save_button = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().description("Download")')))
+            save_button.click()
+            time.sleep(10)
+            print("[SUCCESS] Reel saved!")
 
-            # Look for more options menu
-            # share_selector = "//android.widget.ImageView[@content-desc='Share']"
-            #
-            # try:
-            #     more_button = self.driver.find_element(AppiumBy.XPATH, share_selector)
-            #     more_button.click()
-            #     time.sleep(WAIT_SHORT)
-            # except:
-            #     print("[WARNING] Could not find Share button")
-            #     return False
+        except:
+            print("[WARNING] Could not find Download button")
+            return False
 
-            # Look for Save option
-            download_selector = "//android.widget.TextView[contains(@text, 'Download')]"
-
-            try:
-                save_button = self.driver.find_element(AppiumBy.XPATH, download_selector)
-                save_button.click()
-                time.sleep(WAIT_MEDIUM)
-                print("[SUCCESS] Reel saved!")
-
-            except:
-                print("[WARNING] Could not find Download button")
-                return False
-
-            while not self.driver.find_element(AppiumBy.XPATH, value='//*[@text="For you"]'):
-                # Go back
-                self.driver.back()
-                time.sleep(WAIT_SHORT)
-
-            return True
-        except Exception as e:
-            print(f"[ERROR] Failed to download reel: {e}")
-            # try:
-            #     self.driver.back()
-            # except:
-            #     pass
-            # return False
+        return True
 
     def repost_reel(self):
         """Create new reel post from saved video"""
@@ -394,40 +366,32 @@ class InstagramReelsBot:
 
             # Click create button
 
-            post_selector = "com.instagram.android:id/action_bar_buttons_container_left"
-
-            create_btn = self.driver.find_element(AppiumBy.ID, post_selector)
+            create_btn = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().className("android.widget.ImageView").instance(4)')))
             create_btn.click()
-            time.sleep(WAIT_MEDIUM)
 
             # Select Reel
-            select_reel = self.driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR,
-                                                   'new UiSelector().className("android.view.ViewGroup").instance(2)')
+            select_reel = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR,
+                                                   'new UiSelector().resourceId("com.instagram.android:id/background_color").instance(0)')))
             select_reel.click()
-            time.sleep(WAIT_MEDIUM)
 
             # Click Next multiple times
 
-
-
-            next_btn = self.driver.find_element(AppiumBy.ID, "com.instagram.android:id/next_button_textview")
+            next_btn = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ID, "com.instagram.android:id/next_button_textview")))
             next_btn.click()
-            time.sleep(WAIT_LONG)
 
-            # next_btn_2nd = self.driver.find_element(AppiumBy.ID, "com.instagram.android:id/next_button_textview")
-            # next_btn_2nd.click()
-            # time.sleep(WAIT_MEDIUM)
+            next_btn_2nd = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/clips_right_action_button")')))
+            next_btn_2nd.click()
 
-            next_btn_3rd = self.driver.find_element(AppiumBy.ACCESSIBILITY_ID, "Next") or self.driver.find_element(by=AppiumBy.ID, value="com.instagram.android:id/next_button_layout").click()
-            next_btn_3rd.click()
-            time.sleep(WAIT_MEDIUM)
+            try:
+                popup_share = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Update on your original audio")')))
+                popup_share.click()
 
-            # Click Share/Post
+            except:
 
-            share_btn = self.driver.find_element(AppiumBy.ACCESSIBILITY_ID, "Share")
-            share_btn.click()
-            time.sleep(WAIT_LONG)
-            print("[SUCCESS] Reel posted!")
+                logger.info("Popup share not found, continuing with normal Share button.")
+                share_btn = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Share")')))
+                share_btn.click()
+                print("[SUCCESS] Reel posted!")
 
         except Exception as e:
             print(f"[ERROR] Failed to repost: {e}")
@@ -436,21 +400,10 @@ class InstagramReelsBot:
 
     def go_home(self):
         """Navigate to home screen"""
-        try:
-            home_selectors = [
-                "//android.widget.FrameLayout[@content-desc='Home']",
-                "//android.widget.Button[@content-desc='Home']"
-            ]
-            for selector in home_selectors:
-                try:
-                    home_btn = self.driver.find_element(AppiumBy.XPATH, selector)
-                    home_btn.click()
-                    time.sleep(WAIT_SHORT)
-                    return
-                except:
-                    continue
-        except:
-            pass
+        selector = 'new UiSelector().resourceId("com.instagram.android:id/title_text").text("For you")'
+        while len(self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, value=selector)) == 0:
+            print("[INFO] Navigating to home screen...")
+            self.driver.back()
 
     def run(self):
         """Main bot loop"""
@@ -460,8 +413,6 @@ class InstagramReelsBot:
             if not self.start_appium_server():
                 print("\n[ERROR] Failed to start Appium server. Exiting...")
                 print("[INFO] Please ensure Appium is installed:")
-                print("       npm install -g appium")
-                print("       appium driver install uiautomator2")
                 return
 
             # Connect to device
@@ -486,90 +437,41 @@ class InstagramReelsBot:
                 try:
                     print(f"\n[{time.strftime('%H:%M:%S')}] Checking for new reels...")
 
+                    self.go_home()
                     # Navigate to DMs
                     if not self.navigate_to_dms():
                         print("[WARNING] Could not open DMs, retrying...")
+                        self.handle_popups() # Check for popups on home screen
                         continue
+
+                    self.handle_popups()  # Handle pop-ups after navigating
 
                     # Find conversation
                     if not self.find_conversation(YOUR_USERNAME):
                         print(f"[WARNING] No conversation with @{YOUR_USERNAME}, retrying...")
+                        self.handle_popups()
                         continue
 
+                    self.handle_popups() # Handle pop-ups in conversation
+
                     # Check for reels
-                    reels = self.check_for_reels()
+                    if not self.check_for_reels():
+                        continue
+                    # Download
+                    self.download_reel()
 
-                    if reels:
+                    self.go_home()
 
-                        for i, reel_data in enumerate(reels):
-                            reel_element = reel_data['element']
-                            # reel_id = reel_data['id']
+                    self.handle_popups() # Handle pop-ups after download
 
-                            # Click on reel
-                            reel_element.click()
-                            time.sleep(WAIT_SHORT)
+                    # Repost
+                    self.repost_reel()
 
-                            share_selector = "//android.widget.ImageView[@content-desc='Share']"
-
-                            try:
-                                more_button = self.driver.find_element(AppiumBy.XPATH, share_selector)
-                                more_button.click()
-                                time.sleep(WAIT_SHORT)
-                            except:
-                                print("[WARNING] Could not find Share button")
-                                return False
-
-                            # Copy link
-
-                            copy_selector = "//android.widget.ImageView[@content-desc='Copy link']"
-                            try:
-                                copy_button = self.driver.find_element(AppiumBy.XPATH, copy_selector)
-                                copy_button.click()
-                                time.sleep(WAIT_SHORT)
-                            except:
-                                print("[WARNING] Could not find Copy Link button")
-                                return False
-
-
-
-                            # Get the text from the Android clipboard
-                            copied_text = self.driver.get_clipboard_text()
-                            print(f"The text I copied was: {copied_text}")
-
-                            reel_id = copied_text
-
-
-
-                            if reel_id in self.processed_reels:
-                                print(f"[INFO] Reel {i+1} already processed (ID: {reel_id}), skipping...")
-                                continue
-
-                            print(f"\n[INFO] Processing reel {i+1}/{len(reels)} (ID: {reel_id})...")
-
-                            # Download
-                            if self.download_reel(reel_element):
-                                time.sleep(WAIT_MEDIUM)
-
-                                # Repost
-                                if self.repost_reel():
-                                    print(f"[SUCCESS] Reel reposted!")
-                                    self.processed_reels.add(reel_id)
-                                    self.save_processed_reels()
-                                else:
-                                    print(f"[WARNING] Failed to repost")
-                                    self.processed_reels.add(reel_id)
-                                    self.save_processed_reels()
-                            else:
-                                print(f"[WARNING] Failed to download")
-                                self.processed_reels.add(reel_id)
-                                self.save_processed_reels()
-
-                            time.sleep(WAIT_MEDIUM)
-                    else:
-                        print("[INFO] No new reels found")
+                    self.handle_popups() # Final check before next reel
 
                     # Go back to home
                     self.go_home()
+                    self.handle_popups() # Final check on home screen
 
                     # Wait before next check
                     print(f"[INFO] Waiting {CHECK_INTERVAL} seconds...")
