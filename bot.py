@@ -3,8 +3,6 @@ import time
 import subprocess
 import os
 import platform
-import logging
-logger = logging.getLogger(__name__)
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from appium import webdriver
@@ -17,7 +15,7 @@ YOUR_USERNAME = ""
 APPIUM_SERVER = "http://localhost:4723"
 DEVICE_ID = ""
 
-CHECK_INTERVAL = 320  # Check for new DMs every 60 seconds
+CHECK_INTERVAL = 320  # Check for new DMs every 320 seconds
 
 class InstagramReelsBot:
     def __init__(self):
@@ -26,10 +24,17 @@ class InstagramReelsBot:
 
     def load_processed_reels(self, id):
         """Load list of already processed reels"""
+        if not os.path.exists('processed_reels.txt'):
+            # in case the file does not exist, we will create it
+            with open('processed_reels.txt', 'w') as f:
+                pass
+            return True
+
         with open('processed_reels.txt', 'r') as file:
             content = file.read()
             if id in content:
                 print(f"[INFO] Reel {id} already processed, skipping...")
+                print(f"Checking again after {CHECK_INTERVAL} seconds...")
                 return False
             else:
                 return True
@@ -178,7 +183,7 @@ class InstagramReelsBot:
         options.app_activity = "com.instagram.android.activity.MainTabActivity"
         options.no_reset = True
         options.full_reset = False
-        options.new_command_timeout = 300
+        options.new_command_timeout = 600
         options.auto_grant_permissions = True
 
         # Force app to launch
@@ -224,25 +229,44 @@ class InstagramReelsBot:
             pass
         return False
 
+    def check_connection_health(self):
+        try:
+            current_activity = self.driver.current_activity
+            if current_activity:
+                return True
+        except Exception as e:
+            print(f"[WARNING] Connection health check failed: {e}")
+            return False
+        return False
+
     def handle_popups(self):
         """Handle common pop-ups by clicking 'Not now' or similar buttons."""
         print("[INFO] Checking for pop-ups...")
-        try:
-            not_now_button = WebDriverWait(self.driver, 3).until(EC.presence_of_element_located((AppiumBy.ACCESSIBILITY_ID, "Not now")))
-            not_now_button.click()
-            ok_button = WebDriverWait(self.driver, 3).until(
-                EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("OK")')))
-            ok_button.click()
-            print("[SUCCESS] Clicked 'Not now' pop-up, checking if there is another one.")
-            if not_now_button.is_displayed():
-                not_now_button.click()
-            got_it_button = WebDriverWait(self.driver, 3).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, "new UiSelector().text('Got it')")))
-            got_it_button.click()
-            if WebDriverWait(self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/igds_headline_emphasized_headline").text("Get more from your next reel")')):
-                self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/title_text").text("For you")').click()
 
+
+        popup_selectors = [
+            (AppiumBy.ACCESSIBILITY_ID, "Not now"),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("OK")'),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Got it")'),
+            (AppiumBy.ID, "com.instagram.android:id/appirater_cancel_button"),
+            (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("No, thanks")')
+        ]
+
+        for by, selector in popup_selectors:
+            try:
+                element = WebDriverWait(self.driver, 2).until(EC.presence_of_element_located((by, selector)))
+                element.click()
+                print(f"[SUCCESS] Dismissed popup using: {selector}")
+                time.sleep(1)
+            except:
+                continue
+
+        try:
+            if len(self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR,
+                                             'new UiSelector().text("Get more from your next reel")')) > 0:
+                self.driver.find_element(AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("For you")').click()
         except:
-            print("[INFO] Pop-up not found,continuing...")
+            pass
 
     def navigate_to_dms(self):
         """Navigate to DM inbox"""
@@ -359,51 +383,130 @@ class InstagramReelsBot:
 
         return True
 
+    def go_home(self):
+        """Navigate to home screen"""
+        selector = 'new UiSelector().resourceId("com.instagram.android:id/title_text").text("For you")'
+        attempts = 0
+        max_attempts = 7
+
+        while len(self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, value=selector)) == 0:
+            if attempts >= max_attempts:
+                print("[WARNING] Could not reach Home screen after multiple attempts. Restarting app...")
+                self.driver.activate_app("com.instagram.android")
+                time.sleep(2)
+                break
+
+            self.driver.back()
+            time.sleep(2)
+            attempts += 1
+
+    def clear_stored_videos(self):
+        """Deletes downloaded video files from the specific internal storage path"""
+        print("[INFO] Clearing video files from emulator memory...")
+        try:
+            target_path = "/storage/emulated/0/Movies/Instagram/*"
+
+            command = f"adb shell rm -f {target_path}"
+
+            subprocess.run(command.split(), stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+
+            print(f"[SUCCESS] Cleared files from {target_path}")
+        except Exception as e:
+            print(f"[WARNING] Could not clear files: {e}")
+
     def repost_reel(self):
         """Create new reel post from saved video"""
         print("[INFO] Reposting reel...")
         try:
-
-            # Click create button
-
-            create_btn = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().className("android.widget.ImageView").instance(4)')))
+            # Click create button - try multiple strategies with the exact attributes you provided
+            create_btn = None
+            strategies = [
+                '//android.widget.LinearLayout[@resource-id="com.instagram.android:id/action_bar_buttons_container_left"]/android.widget.ImageView',
+                'new UiSelector().resourceId("com.instagram.android:id/action_bar_buttons_container_left").childSelector(new UiSelector().className("android.widget.ImageView").clickable(true))',
+                'new UiSelector().className("android.widget.ImageView").bounds(0, 63, 127, 210)',
+            ]
+            
+            for strategy in strategies:
+                try:
+                    if strategy.startswith('//'):
+                        # XPath strategy
+                        create_btn = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((AppiumBy.XPATH, strategy)))
+                    else:
+                        # UiAutomator strategy
+                        create_btn = WebDriverWait(self.driver, 3).until(
+                            EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, strategy)))
+                    
+                    if create_btn:
+                        print(f"[SUCCESS] Found create button using: {strategy}")
+                        break
+                except Exception as find_error:
+                    print(f"[DEBUG] Strategy failed: {strategy} - {str(find_error)[:100]}")
+                    continue
+            
+            if not create_btn:
+                raise Exception("Could not find create button with any strategy. Please check if Instagram layout has changed.")
             create_btn.click()
 
             # Select Reel
-            select_reel = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR,
-                                                   'new UiSelector().resourceId("com.instagram.android:id/background_color").instance(0)')))
+            select_reel = WebDriverWait(self.driver, 5).until(
+                EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR,
+                                                'new UiSelector().resourceId("com.instagram.android:id/background_color").instance(0)')))
             select_reel.click()
 
             # Click Next multiple times
-
-            next_btn = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ID, "com.instagram.android:id/next_button_textview")))
+            next_btn = WebDriverWait(self.driver, 5).until(
+                EC.presence_of_element_located((AppiumBy.ID, "com.instagram.android:id/next_button_textview")))
             next_btn.click()
 
-            next_btn_2nd = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceId("com.instagram.android:id/clips_right_action_button")')))
+            # Second Next button
+            next_btn_2nd = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located(
+                (AppiumBy.ANDROID_UIAUTOMATOR,
+                 'new UiSelector().resourceId("com.instagram.android:id/clips_right_action_button")')))
             next_btn_2nd.click()
+
+
+            print("[INFO] Adding caption...")
+            try:
+                caption_text = (
+                    "#🇯🇵Japan is turning footsteps into electricity! "
+                    "Using piezoelectric tiles, every step you take generates a small amount of energy. "
+                    "Millions of steps together can power LED lights and displays in busy places like Shibuya Station. "
+                    "A brilliant way to create a sustainable and smart city turning m..."
+                    "兄弟，他真觉得自己在那份爱泼斯坦名单上💀 "
+                    "特朗普刚才那记总统级魅力（Rizz）直接给哥们整不会了，吹牛老爹（Diddy）还在旁边 4K 高清观看。 "
+                    "这波负面气场（Aura）简直比内塔尼亚胡在新闻发布会上还重。 "
+                    "这波到底是系统 Bug 还是代码飞升？👇 \n"
+                    ". \n"
+                    "#气场 #魅力 #特朗普 #吹牛老爹 #脑干缺失 #短视频 #流量密码 #系统漏洞 #fyp"
+                )
+
+                caption_field = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((AppiumBy.ID, "com.instagram.android:id/caption_input_text_view")))
+                caption_field.click()
+                time.sleep(1)
+                caption_field.send_keys(caption_text)
+                print("[SUCCESS] Caption added.")
+            except Exception as e:
+                print(f"[ERROR] Could not add caption: {e}")
+
+            self.driver.hide_keyboard()
 
             try:
                 popup_share = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Update on your original audio")')))
                 popup_share.click()
-
+                if self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR,'new UiSelector().resourceId("com.instagram.android:id/row_pending_media_status_textview").text("Done posting. Want to send it directly to friends?")'):
+                    print("[SUCCESS] Reel posted!")
             except:
-
-                logger.info("Popup share not found, continuing with normal Share button.")
+                print("Popup share not found, continuing with normal Share button.")
                 share_btn = WebDriverWait(self.driver, 5).until(EC.presence_of_element_located((AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Share")')))
                 share_btn.click()
-                print("[SUCCESS] Reel posted!")
+                if WebDriverWait(self.driver, 15).until(EC.presence_of_all_elements_located((AppiumBy.ANDROID_UIAUTOMATOR,'new UiSelector().resourceId("com.instagram.android:id/row_pending_media_status_textview").text("Done posting. Want to send it directly to friends?")'))):
+                    print("[SUCCESS] Reel posted!")
 
         except Exception as e:
             print(f"[ERROR] Failed to repost: {e}")
             self.go_home()
-            # Go back to home
-
-    def go_home(self):
-        """Navigate to home screen"""
-        selector = 'new UiSelector().resourceId("com.instagram.android:id/title_text").text("For you")'
-        while len(self.driver.find_elements(AppiumBy.ANDROID_UIAUTOMATOR, value=selector)) == 0:
-            print("[INFO] Navigating to home screen...")
-            self.driver.back()
 
     def run(self):
         """Main bot loop"""
@@ -435,6 +538,36 @@ class InstagramReelsBot:
 
             while True:
                 try:
+                    # Check connection health before proceeding
+                    if not self.check_connection_health():
+                        print("[WARNING] Connection lost. Attempting to reconnect...")
+                        
+                        # Try to reconnect
+                        try:
+                            if self.driver:
+                                self.driver.quit()
+                                time.sleep(5)
+                            self.connect()
+                            print("[SUCCESS] Reconnected to device")
+                        except Exception as reconnect_error:
+                            print(f"[ERROR] Failed to reconnect: {reconnect_error}")
+                            print("[INFO] Attempting Appium server restart...")
+                            
+                            # Restart Appium server as last resort
+                            self.stop_appium_server()
+                            time.sleep(5)
+                            if not self.start_appium_server():
+                                print("[ERROR] Failed to restart Appium server. Stopping bot.")
+                                break
+                            
+                            # Try connecting again
+                            self.connect()
+                            print("[SUCCESS] Reconnected after Appium restart")
+                        
+                        # Continue to next iteration after reconnection
+                        continue
+                    
+                    self.clear_stored_videos()
                     print(f"\n[{time.strftime('%H:%M:%S')}] Checking for new reels...")
 
                     self.go_home()
@@ -456,9 +589,14 @@ class InstagramReelsBot:
 
                     # Check for reels
                     if not self.check_for_reels():
+                        print(f"[INFO] No new reels found, retrying in {CHECK_INTERVAL} seconds...")
+                        time.sleep(CHECK_INTERVAL)
                         continue
                     # Download
-                    self.download_reel()
+                    if not self.download_reel():
+                        print(f"[INFO] This reel doesn't have a download button, retrying in {CHECK_INTERVAL} seconds...")
+                        time.sleep(CHECK_INTERVAL)
+                        continue
 
                     self.go_home()
 
@@ -481,8 +619,45 @@ class InstagramReelsBot:
                     raise
                 except Exception as e:
                     print(f"[ERROR] Error in loop: {e}")
-                    print("[INFO] Retrying in 30 seconds...")
-                    time.sleep(30)
+                    
+                    # Handle UiAutomator2 instrumentation crashes
+                    if "instrumentation process is not running" in str(e) or "UiAutomator2" in str(e):
+                        print("[ERROR] Appium UiAutomator2 server crashed. Attempting recovery...")
+                        
+                        # Try to restart Appium server
+                        print("[INFO] Restarting Appium server...")
+                        self.stop_appium_server()
+                        time.sleep(5)
+                        
+                        if not self.start_appium_server():
+                            print("[ERROR] Failed to restart Appium server. Stopping bot.")
+                            break
+                        
+                        # Reconnect to device
+                        print("[INFO] Reconnecting to device...")
+                        try:
+                            if self.driver:
+                                self.driver.quit()
+                                time.sleep(3)
+                            self.connect()
+                            print("[SUCCESS] Reconnected to device")
+                        except Exception as reconnect_error:
+                            print(f"[ERROR] Failed to reconnect: {reconnect_error}")
+                            print("[INFO] Will retry full restart in 60 seconds...")
+                            time.sleep(60)
+                            continue
+                    
+                    else:
+                        # Log specific error details for debugging
+                        if "cannot be proxied to UiAutomator2 server" in str(e):
+                            print("[ERROR] UiAutomator2 server communication failed. This usually means:")
+                            print("        - Appium server crashed")
+                            print("        - Android instrumentation process died")
+                            print("        - Device connection was lost")
+                            print("[INFO] Recovery procedures will be attempted on next iteration")
+                        
+                        print("[INFO] Retrying in 30 seconds...")
+                        time.sleep(30)
 
         except KeyboardInterrupt:
             print("\n\n[INFO] Stopping bot...")
