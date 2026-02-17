@@ -8,7 +8,7 @@ Automated Instagram bot that monitors DMs for reels and automatically reposts th
 
 - **Automatic DM Monitoring**: Checks for new reels in DMs every 5-6 minutes
 - **Smart Duplicate Detection**: Prevents reposting the same reel using unique ID tracking
-- **Automatic Reposting**: Downloads and reposts reels with AI-generated Chinese captions
+- **Automatic Reposting**: Downloads and reposts reels with captions
 - **Cross-Platform Host Support**: Launcher works on Windows, macOS, and Linux (but requires Android device/emulator)
 - **Auto Appium Management**: Automatically starts/stops Appium server
 - **Error Handling**: Comprehensive error handling and recovery mechanisms with Appium crash recovery
@@ -83,7 +83,6 @@ Press `Ctrl+C` to gracefully stop the bot and cleanup resources.
 - `run_bot.bat` - Windows executable (double-click to run)
 - `run_bot.sh` - macOS/Linux executable
 - `processed_reels.txt` - Tracks processed reel IDs
-- `test.py` - Testing utilities for debugging
 
 ### Key Methods
 
